@@ -264,8 +264,8 @@ class SQLiteVectorStore:
 
             raw_score = (
                 cosine_similarity(query_embedding, chunk.embedding)
-                # + lexical_bonus
-                # + intent_bonus
+                + lexical_bonus
+                + intent_bonus
             )
 
             display_score = max(0.0, min(1.0, raw_score))
