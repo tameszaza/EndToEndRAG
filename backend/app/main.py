@@ -79,6 +79,8 @@ def health():
         "status": "ok",
         "product": "SleepPilot",
         "faq_chunks": pipeline.vector_store.count(),
+        "embedding_provider": pipeline.vector_store.get_metadata("embedding_namespace"),
+        "embedding_dimensions": pipeline.vector_store.get_metadata("embedding_dimensions"),
         "vector_db": str(VECTOR_DB_PATH),
     }
 

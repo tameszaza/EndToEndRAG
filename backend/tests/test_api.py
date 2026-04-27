@@ -5,6 +5,7 @@ from app.main import app
 
 def test_chat_endpoint_returns_grounded_answer(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "local")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
     if hasattr(app.state, "rag_pipeline"):
         delattr(app.state, "rag_pipeline")
     client = TestClient(app)
@@ -25,6 +26,7 @@ def test_chat_endpoint_returns_grounded_answer(monkeypatch):
 
 def test_chat_endpoint_applies_guardrails(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "local")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
     if hasattr(app.state, "rag_pipeline"):
         delattr(app.state, "rag_pipeline")
     client = TestClient(app)

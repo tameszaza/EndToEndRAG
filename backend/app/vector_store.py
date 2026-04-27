@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from app.embeddings import HashingEmbedder, cosine_similarity, expand_tokens, tokenize
+from app.embeddings import Embedder, cosine_similarity, create_default_embedder, expand_tokens, tokenize
 
 
 ENTITY_TOKENS = {
@@ -156,9 +156,9 @@ class SQLiteVectorStore:
     item FAQ and keeps setup light for reviewers.
     """
 
-    def __init__(self, db_path: str | Path, embedder: HashingEmbedder | None = None):
+    def __init__(self, db_path: str | Path, embedder: Embedder | None = None):
         self.db_path = Path(db_path)
-        self.embedder = embedder or HashingEmbedder()
+        self.embedder = embedder or create_default_embedder()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
 
@@ -185,7 +185,11 @@ class SQLiteVectorStore:
             connection.execute("DELETE FROM chunks")
             connection.execute("DELETE FROM metadata")
             for chunk in chunk_list:
-                embedding = self.embedder.embed(self._retrieval_text(chunk))
+                embedding = self.embedder.embed(
+                    self._retrieval_text(chunk),
+                    task_type="RETRIEVAL_DOCUMENT",
+                    title=chunk["question"],
+                )
                 connection.execute(
                     """
                     INSERT INTO chunks (id, question, answer, text, embedding)
@@ -229,7 +233,7 @@ class SQLiteVectorStore:
         if top_k <= 0:
             raise ValueError("top_k must be greater than zero.")
 
-        query_embedding = self.embedder.embed(query)
+        query_embedding = self.embedder.embed(query, task_type="RETRIEVAL_QUERY")
         query_tokens = set(expand_tokens(tokenize(query)))
         chunks = self.all_chunks()
         chunk_term_sets = {
@@ -241,11 +245,13 @@ class SQLiteVectorStore:
             for terms in chunk_term_sets.values()
             for token in terms
         )
-        scored = []
+        scored: list[tuple[float, SearchResult]] = []
+
         for chunk in chunks:
             chunk_tokens = chunk_term_sets[chunk.id]
             overlap = query_tokens & chunk_tokens
             entity_overlap = overlap & ENTITY_TOKENS
+
             lexical_bonus = self._lexical_bonus(
                 overlap=overlap,
                 entity_overlap=entity_overlap,
@@ -253,19 +259,30 @@ class SQLiteVectorStore:
                 document_count=len(chunks),
                 query_term_count=len(query_tokens),
             )
+
             intent_bonus = self._intent_bonus(query, chunk)
-            score = max(
-                0.0,
-                min(
-                    1.0,
-                    cosine_similarity(query_embedding, chunk.embedding)
-                    + lexical_bonus
-                    + intent_bonus,
-                ),
+
+            raw_score = (
+                cosine_similarity(query_embedding, chunk.embedding)
+                # + lexical_bonus
+                # + intent_bonus
             )
-            scored.append(SearchResult(chunk=chunk, score=round(score, 6)))
-        scored.sort(key=lambda result: result.score, reverse=True)
-        return scored[:top_k]
+
+            display_score = max(0.0, min(1.0, raw_score))
+
+            scored.append(
+                (
+                    raw_score,
+                    SearchResult(
+                        chunk=chunk,
+                        score=round(display_score, 6),
+                    ),
+                )
+            )
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+
+        return [result for _, result in scored[:top_k]]
 
     def get_metadata(self, key: str) -> str | None:
         with self._connect() as connection:

@@ -75,6 +75,9 @@ Create `backend/.env` from `backend/.env.example` and add your Gemini key:
 LLM_PROVIDER=gemini
 GEMINI_MODEL=gemini-2.5-flash-lite
 GEMINI_API_KEY=your_key_here
+EMBEDDING_PROVIDER=gemini
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+GEMINI_EMBEDDING_DIMENSIONS=768
 ```
 
 `backend/.env` is ignored by git. Do not commit real API keys. If no Gemini key
@@ -148,14 +151,16 @@ Chunking:
 
 Embeddings:
 
-- `HashingEmbedder` creates deterministic local vectors from tokens, phrase
-  tokens, bigrams, and small SleepPilot domain synonym expansions.
+- The default production embedder is Gemini `gemini-embedding-001`, called
+  through the free Gemini API embedding endpoint when `GEMINI_API_KEY` is set.
+- Gemini document embeddings use `RETRIEVAL_DOCUMENT`; user questions use
+  `RETRIEVAL_QUERY`.
 - Each FAQ chunk also has hidden retrieval hints such as `jet lag`, `sleep
   score`, `go to bed`, or `Fitbit/Garmin` so similar SleepPilot wording stays
   separated without making the public FAQ awkward.
-- This avoids requiring a paid embedding call during tests.
+- `HashingEmbedder` remains as the local fallback for tests and offline demos.
 - The hosted LLM is used for answer wording when configured, while retrieval
-  remains local and reproducible.
+  remains persisted locally in SQLite.
 
 Vector database:
 
@@ -207,7 +212,8 @@ Tools used while building:
 - SQLite for the lightweight vector store
 - Pytest for unit and integration tests
 - Gemini API as the optional hosted LLM answer step
-- Local deterministic embeddings for reliable tests and no-key development
+- Gemini `gemini-embedding-001` for free hosted embeddings
+- Local deterministic hashing embeddings for reliable tests and no-key development
 - Pillow once to generate the local `sleeppilot-hero.png` visual asset
 
 Main implementation prompt:
@@ -236,4 +242,5 @@ References:
 
 - Gemini pricing: https://ai.google.dev/gemini-api/docs/pricing
 - Gemini models: https://ai.google.dev/gemini-api/docs/models
+- Gemini embeddings: https://ai.google.dev/api/embeddings
 - `generateContent` endpoint: https://ai.google.dev/api/generate-content

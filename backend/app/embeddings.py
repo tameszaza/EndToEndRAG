@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Iterable, Protocol
+
+import requests
 
 
 STOPWORDS = {
@@ -123,11 +126,30 @@ def tokenize(text: str) -> list[str]:
             tokens.append(replacement)
 
     for raw in re.findall(r"[a-z0-9]+", lowered):
-        token = normalize_token(raw)
+        raw_token = raw.lower()
+
+        if raw_token in STOPWORDS:
+            continue
+
+        token = normalize_token(raw_token)
+
         if token and token not in STOPWORDS:
             tokens.append(token)
 
     return tokens
+
+
+class Embedder(Protocol):
+    dimensions: int
+    namespace: str
+
+    def embed(
+        self,
+        text: str,
+        task_type: str | None = None,
+        title: str | None = None,
+    ) -> list[float]:
+        ...
 
 
 def expand_tokens(tokens: Iterable[str]) -> list[str]:
@@ -148,12 +170,17 @@ class HashingEmbedder:
     """
 
     dimensions: int = 384
-    namespace: str = "sleeppilot-v3"
+    namespace: str = "sleeppilot-v4"
     bigram_weight: float = 1.35
     synonym_weight: float = 0.65
     _hash_cache: dict[str, int] = field(default_factory=dict, init=False, repr=False)
 
-    def embed(self, text: str) -> list[float]:
+    def embed(
+        self,
+        text: str,
+        task_type: str | None = None,
+        title: str | None = None,
+    ) -> list[float]:
         tokens = tokenize(text)
         if not tokens:
             return [0.0] * self.dimensions
@@ -167,10 +194,7 @@ class HashingEmbedder:
         expanded = [token for token in expand_tokens(tokens) if token not in tokens]
         self._add_features(vector, expanded, weight=self.synonym_weight)
 
-        norm = math.sqrt(sum(value * value for value in vector))
-        if norm == 0:
-            return vector
-        return [round(value / norm, 8) for value in vector]
+        return normalize_vector(vector)
 
     def _add_features(self, vector: list[float], features: Iterable[str], weight: float) -> None:
         for feature in features:
@@ -189,7 +213,82 @@ class HashingEmbedder:
         return index
 
 
+@dataclass(frozen=True)
+class GeminiEmbedder:
+    """Gemini embedding client for retrieval vectors.
+
+    Uses the Gemini API embedding endpoint with the free-tier-friendly
+    `gemini-embedding-001` model by default. HashingEmbedder remains available
+    for tests and offline fallback.
+    """
+
+    api_key: str
+    model: str = "gemini-embedding-001"
+    dimensions: int = 768
+    timeout_seconds: float = 20.0
+
+    @property
+    def namespace(self) -> str:
+        return f"gemini:{self.model}:{self.dimensions}"
+
+    def embed(
+        self,
+        text: str,
+        task_type: str | None = None,
+        title: str | None = None,
+    ) -> list[float]:
+        payload: dict[str, object] = {
+            "model": f"models/{self.model}",
+            "content": {"parts": [{"text": text}]},
+            "outputDimensionality": self.dimensions,
+        }
+
+        if task_type:
+            payload["taskType"] = task_type
+        if title and task_type == "RETRIEVAL_DOCUMENT":
+            payload["title"] = title
+
+        response = requests.post(
+            "https://generativelanguage.googleapis.com/v1beta/"
+            f"models/{self.model}:embedContent",
+            headers={
+                "x-goog-api-key": self.api_key,
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=self.timeout_seconds,
+        )
+        response.raise_for_status()
+        values = response.json()["embedding"]["values"]
+        return normalize_vector([float(value) for value in values])
+
+
+def create_default_embedder() -> Embedder:
+    provider = os.getenv("EMBEDDING_PROVIDER", "gemini").lower()
+    api_key = os.getenv("GEMINI_API_KEY")
+
+    if provider == "gemini" and api_key:
+        return GeminiEmbedder(
+            api_key=api_key,
+            model=os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001"),
+            dimensions=int(os.getenv("GEMINI_EMBEDDING_DIMENSIONS", "768")),
+        )
+
+    return HashingEmbedder()
+
+
+def normalize_vector(vector: list[float]) -> list[float]:
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm == 0:
+        return vector
+    return [round(value / norm, 8) for value in vector]
+
+
 def cosine_similarity(left: list[float], right: list[float]) -> float:
     if len(left) != len(right):
         raise ValueError("Vectors must have the same dimensions.")
-    return sum(a * b for a, b in zip(left, right))
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm == 0 or right_norm == 0:
+        return 0.0
+    return sum(a * b for a, b in zip(left, right)) / (left_norm * right_norm)

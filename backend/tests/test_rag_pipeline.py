@@ -2,12 +2,20 @@ from pathlib import Path
 
 import pytest
 
+from app.embeddings import HashingEmbedder
 from app.faq_loader import load_and_chunk_faq
 from app.rag_pipeline import RAGPipeline
 from app.vector_store import SQLiteVectorStore
 
 
 FAQ_PATH = Path(__file__).resolve().parent.parent / "data" / "faq.md"
+
+
+def make_test_store(tmp_path) -> SQLiteVectorStore:
+    return SQLiteVectorStore(
+        tmp_path / "vectors.sqlite3",
+        embedder=HashingEmbedder(),
+    )
 
 
 @pytest.mark.parametrize(
@@ -36,7 +44,7 @@ def test_vector_store_routes_diverse_questions_to_expected_chunks(
     expected_chunk_id,
 ):
     chunks = load_and_chunk_faq(FAQ_PATH)
-    store = SQLiteVectorStore(tmp_path / "vectors.sqlite3")
+    store = make_test_store(tmp_path)
     store.ensure_built(chunks)
 
     results = store.similarity_search(question, top_k=3)
@@ -46,7 +54,7 @@ def test_vector_store_routes_diverse_questions_to_expected_chunks(
 
 def test_vector_store_retrieves_pricing_chunk(tmp_path):
     chunks = load_and_chunk_faq(FAQ_PATH)
-    store = SQLiteVectorStore(tmp_path / "vectors.sqlite3")
+    store = make_test_store(tmp_path)
     store.ensure_built(chunks)
 
     results = store.similarity_search("How much does the premium plan cost?", top_k=3)
@@ -58,7 +66,7 @@ def test_vector_store_retrieves_pricing_chunk(tmp_path):
 
 def test_vector_store_retrieves_product_overview_for_generic_product_question(tmp_path):
     chunks = load_and_chunk_faq(FAQ_PATH)
-    store = SQLiteVectorStore(tmp_path / "vectors.sqlite3")
+    store = make_test_store(tmp_path)
     store.ensure_built(chunks)
 
     results = store.similarity_search("What is the product?", top_k=3)
@@ -69,7 +77,7 @@ def test_vector_store_retrieves_product_overview_for_generic_product_question(tm
 
 def test_vector_store_retrieves_product_overview_for_this_thing_question(tmp_path):
     chunks = load_and_chunk_faq(FAQ_PATH)
-    store = SQLiteVectorStore(tmp_path / "vectors.sqlite3")
+    store = make_test_store(tmp_path)
     store.ensure_built(chunks)
 
     results = store.similarity_search("What is this thing?", top_k=3)
@@ -79,7 +87,7 @@ def test_vector_store_retrieves_product_overview_for_this_thing_question(tmp_pat
 
 def test_vector_store_retrieves_sleep_improvement_chunk(tmp_path):
     chunks = load_and_chunk_faq(FAQ_PATH)
-    store = SQLiteVectorStore(tmp_path / "vectors.sqlite3")
+    store = make_test_store(tmp_path)
     store.ensure_built(chunks)
 
     results = store.similarity_search("How does SleepPilot improve my sleep?", top_k=3)
@@ -89,7 +97,7 @@ def test_vector_store_retrieves_sleep_improvement_chunk(tmp_path):
 
 def test_vector_store_retrieves_bedtime_routine_for_go_to_bed_question(tmp_path):
     chunks = load_and_chunk_faq(FAQ_PATH)
-    store = SQLiteVectorStore(tmp_path / "vectors.sqlite3")
+    store = make_test_store(tmp_path)
     store.ensure_built(chunks)
 
     results = store.similarity_search("Can it help me plan when to go to bed?", top_k=3)
@@ -100,7 +108,7 @@ def test_vector_store_retrieves_bedtime_routine_for_go_to_bed_question(tmp_path)
 
 def test_vector_store_retrieves_data_collection_before_privacy(tmp_path):
     chunks = load_and_chunk_faq(FAQ_PATH)
-    store = SQLiteVectorStore(tmp_path / "vectors.sqlite3")
+    store = make_test_store(tmp_path)
     store.ensure_built(chunks)
 
     results = store.similarity_search("What data does SleepPilot collect?", top_k=3)
@@ -110,7 +118,7 @@ def test_vector_store_retrieves_data_collection_before_privacy(tmp_path):
 
 def test_vector_store_distinguishes_wearable_support_from_no_wearable(tmp_path):
     chunks = load_and_chunk_faq(FAQ_PATH)
-    store = SQLiteVectorStore(tmp_path / "vectors.sqlite3")
+    store = make_test_store(tmp_path)
     store.ensure_built(chunks)
 
     support_results = store.similarity_search("Does SleepPilot work with Garmin or Fitbit?", top_k=3)
@@ -122,6 +130,7 @@ def test_vector_store_distinguishes_wearable_support_from_no_wearable(tmp_path):
 
 def test_rag_pipeline_answers_in_scope_question(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "local")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
     pipeline = RAGPipeline(
         faq_path=FAQ_PATH,
         vector_db_path=tmp_path / "vectors.sqlite3",
@@ -137,6 +146,7 @@ def test_rag_pipeline_answers_in_scope_question(tmp_path, monkeypatch):
 
 def test_rag_pipeline_sends_only_clean_context_for_clear_match(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "local")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
     pipeline = RAGPipeline(
         faq_path=FAQ_PATH,
         vector_db_path=tmp_path / "vectors.sqlite3",
@@ -149,6 +159,7 @@ def test_rag_pipeline_sends_only_clean_context_for_clear_match(tmp_path, monkeyp
 
 def test_rag_pipeline_can_send_three_chunks_for_ambiguous_matches(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "local")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
     pipeline = RAGPipeline(
         faq_path=FAQ_PATH,
         vector_db_path=tmp_path / "vectors.sqlite3",
@@ -162,6 +173,7 @@ def test_rag_pipeline_can_send_three_chunks_for_ambiguous_matches(tmp_path, monk
 
 def test_rag_pipeline_removes_model_citation_markers(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "local")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
     pipeline = RAGPipeline(
         faq_path=FAQ_PATH,
         vector_db_path=tmp_path / "vectors.sqlite3",
@@ -172,6 +184,7 @@ def test_rag_pipeline_removes_model_citation_markers(tmp_path, monkeypatch):
 
 def test_rag_pipeline_declines_out_of_scope_question(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "local")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
     pipeline = RAGPipeline(
         faq_path=FAQ_PATH,
         vector_db_path=tmp_path / "vectors.sqlite3",
