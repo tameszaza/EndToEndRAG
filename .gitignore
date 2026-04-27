@@ -6,3 +6,5 @@ node_modules/
 dist/
 .chromadb/
 .DS_Store
+*.sqlite3
+*.db

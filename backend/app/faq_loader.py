@@ -1,6 +1,6 @@
-from pathlib import Path
 import re
-from typing import List, Dict
+from pathlib import Path
+from typing import Dict, List
 
 
 def load_faq_text(file_path: str | Path) -> str:

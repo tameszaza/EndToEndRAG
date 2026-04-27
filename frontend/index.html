@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="SleepPilot is a sleep optimization app with an embedded RAG FAQ chatbot."
+    />
+    <title>SleepPilot | Smarter nights. Sharper days.</title>
+    <link rel="icon" type="image/png" href="/static/favicon.png" />
+    <link rel="preload" as="image" href="/static/sleeppilot-hero.png" />
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://unpkg.com/lucide@latest" defer></script>
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <header class="site-header" aria-label="SleepPilot navigation">
+      <a class="brand" href="#top" aria-label="SleepPilot home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>SleepPilot</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary navigation">
+        <a href="#signals">Signals</a>
+        <a href="#privacy">Privacy</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <div class="api-pill" id="apiStatus">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span>Connecting</span>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-bg" aria-hidden="true"></div>
+        <div class="hero-overlay" aria-hidden="true"></div>
+
+        <div class="hero-content">
+          <div class="hero-copy">
+            <p class="eyebrow">Sleep optimization with grounded guidance</p>
+            <h1 id="hero-title">SleepPilot</h1>
+            <p class="tagline">Smarter nights. Sharper days.</p>
+            <p class="hero-description">
+              SleepPilot helps users understand sleep patterns, build healthier routines,
+              and receive personalized bedtime recommendations using sleep logs, wearable
+              data, and lifestyle inputs.
+            </p>
+            <div class="hero-metrics" aria-label="SleepPilot highlights">
+              <div>
+                <span>15</span>
+                <small>FAQ sources</small>
+              </div>
+              <div>
+                <span>Local</span>
+                <small>vector store</small>
+              </div>
+              <div>
+                <span>Gemini</span>
+                <small>ready answers</small>
+              </div>
+            </div>
+          </div>
+
+          <section class="chat-shell" aria-labelledby="chat-title">
+            <div class="chat-header">
+              <div>
+                <p class="eyebrow compact">Embedded FAQ assistant</p>
+                <h2 id="chat-title">SleepPilot Coach</h2>
+              </div>
+              <span class="chat-mode" id="chatMode">RAG</span>
+            </div>
+
+            <div class="quick-questions" aria-label="Quick questions">
+              <button type="button" data-question="Does SleepPilot work without a wearable device?">
+                Wearables
+              </button>
+              <button type="button" data-question="How does SleepPilot protect my privacy?">
+                Privacy
+              </button>
+              <button type="button" data-question="Can SleepPilot help me sleep earlier?">
+                Routine
+              </button>
+            </div>
+
+            <div class="chat-messages" id="chatMessages" aria-live="polite">
+              <article class="message assistant">
+                <div class="avatar" aria-hidden="true">SP</div>
+                <div class="bubble">
+                  <p>
+                    Hi, I am SleepPilot Coach. Ask me about SleepPilot features,
+                    wearables, pricing, privacy, smart alarms, travel, or bedtime routines.
+                  </p>
+                </div>
+              </article>
+            </div>
+
+            <form class="chat-form" id="chatForm">
+              <label class="sr-only" for="questionInput">Ask SleepPilot Coach</label>
+              <textarea
+                id="questionInput"
+                name="question"
+                rows="1"
+                maxlength="700"
+                placeholder="Ask about your bedtime routine, sleep score, privacy, pricing..."
+                required
+              ></textarea>
+              <button class="send-button" type="submit" aria-label="Send question">
+                <i data-lucide="send-horizontal" aria-hidden="true"></i>
+                <span>Send</span>
+              </button>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section class="section-band" id="signals" aria-labelledby="signals-title">
+        <div class="section-inner">
+          <div class="section-kicker">Sleep signals</div>
+          <h2 id="signals-title">A calmer way to understand the night.</h2>
+          <div class="feature-grid">
+            <article class="feature-card">
+              <i data-lucide="moon" aria-hidden="true"></i>
+              <h3>Routine planning</h3>
+              <p>Personalized wind-down plans built from bedtime, wake-up time, and daily habits.</p>
+            </article>
+            <article class="feature-card">
+              <i data-lucide="watch" aria-hidden="true"></i>
+              <h3>Wearable context</h3>
+              <p>Optional Apple Health, Google Fit, Fitbit, and Garmin signals enrich the picture.</p>
+            </article>
+            <article class="feature-card">
+              <i data-lucide="alarm-clock" aria-hidden="true"></i>
+              <h3>Smart alarm windows</h3>
+              <p>Wake-up recommendations respect your schedule while looking at recent sleep patterns.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="privacy-row" id="privacy" aria-labelledby="privacy-title">
+        <div>
+          <p class="section-kicker">Privacy first</p>
+          <h2 id="privacy-title">Your sleep data stays about your sleep.</h2>
+        </div>
+        <p>
+          SleepPilot uses sleep-related data you choose to enter or connect. It does not ask for
+          private messages, browsing history, or unrelated personal files, and users can disconnect
+          integrations or delete their data from settings.
+        </p>
+      </section>
+
+      <section class="faq-strip" id="faq" aria-labelledby="faq-title">
+        <div>
+          <p class="section-kicker">RAG demo</p>
+          <h2 id="faq-title">Grounded in the SleepPilot FAQ.</h2>
+        </div>
+        <div class="faq-topics" aria-label="FAQ coverage">
+          <span>Sleep score</span>
+          <span>Jet lag</span>
+          <span>Pricing</span>
+          <span>Medical limits</span>
+          <span>Students</span>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
