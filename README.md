@@ -180,6 +180,151 @@ At query time, the user question is embedded with the same embedding provider us
 └── README.md
 ```
 
+
+## Installation Guide
+
+This project is designed to run locally. Deployment is optional.
+
+### Requirements
+
+- Python 3.11 or newer
+- pip
+- Optional: Gemini API key if you want hosted embeddings or hosted answer generation
+
+No Node.js installation is required because the frontend is plain HTML, CSS, and JavaScript served by FastAPI.
+
+### 1. Clone or unzip the project
+
+```bash
+git clone <your-repo-url>
+cd EndToEndRAG
+```
+
+Or, if using a zip file:
+
+```bash
+unzip EndToEndRAG.zip
+cd EndToEndRAG
+```
+
+### 2. Create a virtual environment
+
+Linux/macOS:
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Windows PowerShell:
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+Windows Command Prompt:
+
+```cmd
+cd backend
+python -m venv .venv
+.venv\Scripts\activate.bat
+```
+
+### 3. Install dependencies
+
+From inside the `backend` folder with the virtual environment activated:
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Configure environment variables
+
+Copy the example environment file:
+
+Linux/macOS:
+
+```bash
+cp .env.example .env
+```
+
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+You have two setup options.
+
+#### Option A: Local mode with no API key
+
+Use this for testing, grading, and offline demos.
+
+In `backend/.env`:
+
+```env
+LLM_PROVIDER=local
+EMBEDDING_PROVIDER=local
+GEMINI_API_KEY=
+```
+
+This uses the local hashing embedder and local grounded fallback answers. No external API calls are required.
+
+#### Option B: Gemini mode
+
+Use this if you want hosted Gemini embeddings and Gemini answer generation.
+
+In `backend/.env`:
+
+```env
+LLM_PROVIDER=gemini
+GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_API_KEY=your_key_here
+
+EMBEDDING_PROVIDER=gemini
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+GEMINI_EMBEDDING_DIMENSIONS=768
+```
+
+The first request may take longer because the app builds the SQLite vector store by embedding all FAQ chunks.
+
+#### Option C: OpenAI-compatible answer model
+
+Use this if you want the answer generation step to call Typhoon, OpenAI, OpenRouter, LM Studio, Ollama-compatible endpoints, or another chat-completions-compatible API.
+
+In `backend/.env`:
+
+```env
+LLM_PROVIDER=openai-compatible
+LLM_API_KEY=your_key_here
+LLM_BASE_URL=https://api.opentyphoon.ai/v1
+OPENAI_COMPATIBLE_MODEL=typhoon-v2.1-12b-instruct
+
+EMBEDDING_PROVIDER=local
+```
+
+You can also set `EMBEDDING_PROVIDER=gemini` if you have a Gemini API key and want Gemini retrieval embeddings.
+
+### 5. Run the app
+
+From inside the `backend` folder with the virtual environment activated:
+
+```bash
+uvicorn app.main:app --reload
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+The FastAPI backend serves the frontend page directly, so you only need one command.
+
+
 ## How The Project Works
 
 ### 1. Frontend
@@ -704,149 +849,6 @@ Controls frontend chat behavior. It sends user questions to `/api/chat`, display
 
 Styles the landing page, product sections, chatbot, messages, source badges, and responsive layout.
 
-## Installation Guide
-
-This project is designed to run locally. Deployment is optional.
-
-### Requirements
-
-- Python 3.11 or newer
-- pip
-- Optional: Gemini API key if you want hosted embeddings or hosted answer generation
-
-No Node.js installation is required because the frontend is plain HTML, CSS, and JavaScript served by FastAPI.
-
-### 1. Clone or unzip the project
-
-```bash
-git clone <your-repo-url>
-cd EndToEndRAG
-```
-
-Or, if using a zip file:
-
-```bash
-unzip EndToEndRAG.zip
-cd EndToEndRAG
-```
-
-### 2. Create a virtual environment
-
-Linux/macOS:
-
-```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-Windows PowerShell:
-
-```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-Windows Command Prompt:
-
-```cmd
-cd backend
-python -m venv .venv
-.venv\Scripts\activate.bat
-```
-
-### 3. Install dependencies
-
-From inside the `backend` folder with the virtual environment activated:
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Configure environment variables
-
-Copy the example environment file:
-
-Linux/macOS:
-
-```bash
-cp .env.example .env
-```
-
-Windows PowerShell:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-You have two setup options.
-
-#### Option A: Local mode with no API key
-
-Use this for testing, grading, and offline demos.
-
-In `backend/.env`:
-
-```env
-LLM_PROVIDER=local
-EMBEDDING_PROVIDER=local
-GEMINI_API_KEY=
-```
-
-This uses the local hashing embedder and local grounded fallback answers. No external API calls are required.
-
-#### Option B: Gemini mode
-
-Use this if you want hosted Gemini embeddings and Gemini answer generation.
-
-In `backend/.env`:
-
-```env
-LLM_PROVIDER=gemini
-GEMINI_MODEL=gemini-2.5-flash-lite
-GEMINI_API_KEY=your_key_here
-
-EMBEDDING_PROVIDER=gemini
-GEMINI_EMBEDDING_MODEL=gemini-embedding-001
-GEMINI_EMBEDDING_DIMENSIONS=768
-```
-
-The first request may take longer because the app builds the SQLite vector store by embedding all FAQ chunks.
-
-#### Option C: OpenAI-compatible answer model
-
-Use this if you want the answer generation step to call Typhoon, OpenAI, OpenRouter, LM Studio, Ollama-compatible endpoints, or another chat-completions-compatible API.
-
-In `backend/.env`:
-
-```env
-LLM_PROVIDER=openai-compatible
-LLM_API_KEY=your_key_here
-LLM_BASE_URL=https://api.opentyphoon.ai/v1
-OPENAI_COMPATIBLE_MODEL=typhoon-v2.1-12b-instruct
-
-EMBEDDING_PROVIDER=local
-```
-
-You can also set `EMBEDDING_PROVIDER=gemini` if you have a Gemini API key and want Gemini retrieval embeddings.
-
-### 5. Run the app
-
-From inside the `backend` folder with the virtual environment activated:
-
-```bash
-uvicorn app.main:app --reload
-```
-
-Open:
-
-```text
-http://127.0.0.1:8000
-```
-
-The FastAPI backend serves the frontend page directly, so you only need one command.
-
 ## API Usage
 
 ### Health check
@@ -937,11 +939,6 @@ Current test coverage includes:
 - OpenAI-compatible chat-completions API support for optional alternative LLMs
 - Local deterministic hashing embedder for tests and no-key development
 
-## Main Prompt Used While Building
-
-```text
-Build a landing page with an embedded FAQ chatbot for SleepPilot, a fictional sleep optimization app. Use a minimal RAG pipeline over the product FAQ, include guardrails for out-of-scope questions, add unit and integration tests, and document setup, architecture, RAG approach, and manual test cases.
-```
 
 ## Troubleshooting
 
