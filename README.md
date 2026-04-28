@@ -34,31 +34,118 @@ The assistant is called **SleepPilot Coach**. It answers questions about SleepPi
 
 ```mermaid
 flowchart TD
-    A[User] --> B[Landing Page + Chat UI]
-    B -->|POST /api/chat| C[FastAPI Backend]
-    C --> D[RAGPipeline]
-    D --> E[FAQ Loader]
-    E --> F[Markdown FAQ]
-    E --> G[Q&A Chunks]
-    G --> H{Embedding Provider}
-    H -->|Gemini key configured| I[GeminiEmbedder]
-    H -->|No key or local mode| J[HashingEmbedder]
-    I --> K[(SQLite Vector Store)]
-    J --> K
-    D --> L[Hybrid Retriever]
-    L --> K
-    L --> M[Top FAQ Chunks]
-    M --> N[Guardrails + Context Selector]
-    N --> O{Answer Provider}
-    O -->|Gemini configured| P[Gemini generateContent]
-    O -->|OpenAI-compatible configured| Q[OpenAI-compatible Chat API]
-    O -->|No API or API failure| R[Local Grounded Fallback]
-    P --> S[Answer + Sources]
-    Q --> S
-    R --> S
-    S --> B
-```
+    %% =========================
+    %% User Interface Layer
+    %% =========================
+    User["User"] --> UI["Landing Page + Embedded Chatbot<br/>frontend/index.html"]
+    UI --> JS["Chat UI Logic<br/>frontend/static/app.js"]
+    JS --> ChatAPI["POST /api/chat<br/>FastAPI Backend"]
 
+    %% =========================
+    %% API Layer
+    %% =========================
+    ChatAPI --> MainAPI["API Layer<br/>backend/app/main.py"]
+    MainAPI --> Pipeline["RAGPipeline.answer()<br/>backend/app/rag_pipeline.py"]
+
+    %% =========================
+    %% Input Validation
+    %% =========================
+    Pipeline --> Validate{"Validate user question"}
+    Validate -->|Empty input| EmptyResponse["Return helper message"]
+    Validate -->|Too long| LongResponse["Return too-long message"]
+    Validate -->|Valid input| Retrieve["Retrieve relevant FAQ chunks"]
+
+    %% =========================
+    %% Knowledge Base Preparation
+    %% =========================
+    FAQFile["Markdown FAQ<br/>backend/data/faq.md"] --> Loader["FAQ Loader<br/>load_faq_text()"]
+    Loader --> Chunker["FAQ Chunker<br/>chunk_faq_markdown()"]
+    Chunker --> FAQChunks["Q&A Chunks<br/>faq-001 to faq-015"]
+
+    %% =========================
+    %% Embedding Provider Selection
+    %% =========================
+    FAQChunks --> EmbedProvider{"Embedding provider"}
+    EmbedProvider -->|Gemini API key configured| GeminiEmbed["GeminiEmbedder<br/>gemini-embedding-001"]
+    EmbedProvider -->|Local mode or no key| HashEmbed["HashingEmbedder<br/>local deterministic embedder"]
+
+    GeminiEmbed --> DocVectors["Document Embeddings"]
+    HashEmbed --> DocVectors
+
+    %% =========================
+    %% Vector Store
+    %% =========================
+    DocVectors --> SQLite["SQLite Vector Store<br/>sleeppilot_vectors.sqlite3"]
+    SQLite --> Metadata["Metadata Check<br/>content signature, dimensions, namespace"]
+    Metadata -->|FAQ or embedding config changed| Rebuild["Rebuild Vector Store"]
+    Metadata -->|No change| Reuse["Reuse Existing Vectors"]
+    Rebuild --> SQLite
+    Reuse --> SQLite
+
+    %% =========================
+    %% Retrieval
+    %% =========================
+    Retrieve --> QueryEmbed["Embed User Question<br/>same embedding provider"]
+    QueryEmbed --> Similarity["Cosine Similarity Search"]
+    SQLite --> Similarity
+
+    Similarity --> HybridScore["Hybrid Retrieval Scoring<br/>raw_score = cosine + lexical_bonus + intent_bonus"]
+    HybridScore --> Rank["Rank FAQ Chunks<br/>sort by raw_score"]
+    Rank --> TopK["Top FAQ Chunks<br/>top_k = 4"]
+
+    %% =========================
+    %% Guardrails and Context
+    %% =========================
+    TopK --> ScopeCheck{"Scope and confidence check"}
+    ScopeCheck -->|Out of scope| Decline["Return polite refusal<br/>no sources"]
+    ScopeCheck -->|Low confidence| Unknown["Return not enough FAQ information"]
+    ScopeCheck -->|In scope| ContextSelector["Context Selector<br/>select 1 to 3 useful chunks"]
+
+    ContextSelector --> PromptBuilder["Build LLM Prompt<br/>system prompt + FAQ context + user question"]
+
+    %% =========================
+    %% Answer Provider
+    %% =========================
+    PromptBuilder --> AnswerProvider{"Answer provider"}
+    AnswerProvider -->|Gemini configured| GeminiLLM["Gemini generateContent API"]
+    AnswerProvider -->|OpenAI-compatible configured| OpenAICompat["OpenAI-compatible Chat API<br/>OpenAI, Typhoon, OpenRouter, LM Studio"]
+    AnswerProvider -->|No API or API failure| LocalFallback["Local Grounded Fallback<br/>return best FAQ answer"]
+
+    GeminiLLM --> CleanAnswer["Clean Answer<br/>remove bracket citations"]
+    OpenAICompat --> CleanAnswer
+    LocalFallback --> CleanAnswer
+
+    %% =========================
+    %% Response
+    %% =========================
+    CleanAnswer --> Response["ChatResponse JSON<br/>answer, sources, in_scope, mode, confidence"]
+    Response --> MainAPI
+    MainAPI --> JS
+    JS --> UI
+    UI --> User
+
+    %% =========================
+    %% Styling
+    %% =========================
+    classDef ui fill:#e0f2fe,stroke:#0369a1,stroke-width:1px,color:#0f172a;
+    classDef api fill:#dcfce7,stroke:#15803d,stroke-width:1px,color:#0f172a;
+    classDef rag fill:#fef3c7,stroke:#b45309,stroke-width:1px,color:#0f172a;
+    classDef data fill:#ede9fe,stroke:#6d28d9,stroke-width:1px,color:#0f172a;
+    classDef decision fill:#fee2e2,stroke:#b91c1c,stroke-width:1px,color:#0f172a;
+    classDef output fill:#f1f5f9,stroke:#475569,stroke-width:1px,color:#0f172a;
+
+    class User,UI,JS ui;
+    class ChatAPI,MainAPI api;
+    class Pipeline,Retrieve,QueryEmbed,Similarity,HybridScore,Rank,TopK,ContextSelector,PromptBuilder,CleanAnswer rag;
+    class FAQFile,Loader,Chunker,FAQChunks,DocVectors,SQLite,Metadata,Rebuild,Reuse data;
+    class Validate,EmbedProvider,ScopeCheck,AnswerProvider decision;
+    class EmptyResponse,LongResponse,Decline,Unknown,GeminiEmbed,HashEmbed,GeminiLLM,OpenAICompat,LocalFallback,Response output;
+```
+The system starts from a static landing page with an embedded chatbot. When the user sends a question, the frontend calls the FastAPI `/api/chat` endpoint. The backend passes the question into `RAGPipeline.answer()`, which validates the input, retrieves relevant SleepPilot FAQ chunks from the SQLite vector store, applies guardrails, selects useful context, and generates a grounded answer.
+
+The FAQ knowledge base is stored in `backend/data/faq.md`. Each FAQ question and answer pair is loaded and converted into a chunk. The chunks are embedded using either Gemini embeddings or the local `HashingEmbedder`, depending on environment configuration. The resulting vectors are stored in SQLite with metadata so the vector store can be reused or rebuilt when the FAQ content or embedding configuration changes.
+
+At query time, the user question is embedded with the same embedding provider used for the FAQ chunks. The retriever calculates a hybrid score using vector cosine similarity, lexical keyword overlap, and intent-based rules. The top chunks are passed through scope checks and context selection before being sent to the answer provider. If Gemini or an OpenAI-compatible API is configured, the selected FAQ context is passed to the LLM. If no external API is available, the system falls back to a local grounded answer using the best retrieved FAQ chunk.
 ## Project Structure
 
 ```text
@@ -908,49 +995,3 @@ Then open:
 ```text
 http://127.0.0.1:8000
 ```
-
-### Do not submit secrets or generated files
-
-Before creating a zip submission, remove these files and folders:
-
-```text
-.git/
-backend/.env
-backend/.pytest_cache/
-backend/app/__pycache__/
-backend/tests/__pycache__/
-backend/data/sleeppilot_vectors.sqlite3
-```
-
-The `.env` file contains secrets. The SQLite vector database is generated automatically and does not need to be submitted.
-
-## Submission Checklist
-
-Before submitting, make sure the project includes:
-
-- Landing page
-- Embedded chatbot
-- 15 FAQ pairs
-- FAQ chunking
-- Embeddings
-- Vector database logic
-- Retrieval endpoint
-- Chat endpoint
-- Guardrails
-- Unit tests
-- Integration tests
-- `.env.example`
-- Updated README
-
-Do not include:
-
-- Real API keys
-- `.env`
-- `.git`
-- `__pycache__`
-- `.pytest_cache`
-- Generated SQLite vector database
-
-## Future Improvements
-
-With more time, I would add an admin page for editing FAQ entries and triggering a vector-store rebuild from the browser. I would also add streamed responses, source expand/collapse in the UI, and a small evaluation set to measure retrieval quality over more user question styles.
