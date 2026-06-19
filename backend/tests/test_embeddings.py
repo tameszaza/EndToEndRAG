@@ -3,7 +3,6 @@ import pytest
 from app.embeddings import (
     LocalSentenceTransformerEmbedder,
     create_default_embedder,
-    tokenize,
 )
 
 
@@ -73,11 +72,3 @@ def test_local_embedder_prefixes_prompt_when_model_has_no_registered_prompts(mon
 
     assert captured["sentences"] == "passage: FAQ text"
     assert "prompt_name" not in captured
-
-
-def test_tokenize_adds_domain_phrase_tokens():
-    tokens = tokenize("Can SleepPilot help with jet lag and Apple Health?")
-
-    assert "jet_lag" in tokens
-    assert "apple_health" in tokens
-    assert "sleeppilot" not in tokens

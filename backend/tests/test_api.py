@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.rag_pipeline import RAGPipeline
-from tests.helpers import ConstantTestEmbedder
+from tests.helpers import CosineTestEmbedder
 
 
 FAQ_PATH = Path(__file__).resolve().parent.parent / "data" / "faq.md"
@@ -15,7 +15,7 @@ def install_test_pipeline(tmp_path, monkeypatch):
     app.state.rag_pipeline = RAGPipeline(
         faq_path=FAQ_PATH,
         vector_db_path=tmp_path / "vectors.sqlite3",
-        embedder=ConstantTestEmbedder(),
+        embedder=CosineTestEmbedder(),
     )
 
 
