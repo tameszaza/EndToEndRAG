@@ -1,4 +1,5 @@
 from pathlib import Path
+import sqlite3
 from typing import Any, Literal
 
 from fastapi import FastAPI
@@ -7,8 +8,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from app.conversation import ConversationTurn
 from app.faq_loader import load_and_chunk_faq
-from app.rag_pipeline import ConversationTurn, RAGPipeline
+from app.rag_pipeline import RAGPipeline
 
 
 app = FastAPI(
@@ -53,12 +55,28 @@ class SourceResponse(BaseModel):
     score: float
 
 
+class LLMDebugCallResponse(BaseModel):
+    stage: str
+    messages: list[dict[str, str]]
+    temperature: float
+    max_tokens: int
+    response_text: str | None = None
+    skipped_reason: str | None = None
+    error: str | None = None
+
+
+class LLMDebugResponse(BaseModel):
+    retrieval_query: str
+    calls: list[LLMDebugCallResponse]
+
+
 class ChatResponse(BaseModel):
     answer: str
     sources: list[SourceResponse]
     in_scope: bool
     mode: str
     confidence: float
+    debug: LLMDebugResponse | None = None
 
 
 def get_rag_pipeline() -> RAGPipeline:
@@ -80,14 +98,40 @@ def landing_page():
 
 @app.get("/api/health")
 def health():
-    pipeline = get_rag_pipeline()
+    metadata = get_vector_db_metadata()
     return {
         "status": "ok",
         "product": "SleepPilot",
-        "faq_chunks": pipeline.vector_store.count(),
-        "embedding_provider": pipeline.vector_store.get_metadata("embedding_namespace"),
-        "embedding_dimensions": pipeline.vector_store.get_metadata("embedding_dimensions"),
+        "faq_chunks": metadata.get("chunk_count"),
+        "embedding_provider": metadata.get("embedding_namespace"),
+        "embedding_dimensions": metadata.get("embedding_dimensions"),
         "vector_db": str(VECTOR_DB_PATH),
+    }
+
+
+def get_vector_db_metadata() -> dict[str, str | None]:
+    if not VECTOR_DB_PATH.exists():
+        return {
+            "chunk_count": None,
+            "embedding_namespace": None,
+            "embedding_dimensions": None,
+        }
+
+    try:
+        with sqlite3.connect(VECTOR_DB_PATH) as connection:
+            rows = connection.execute("SELECT key, value FROM metadata").fetchall()
+    except sqlite3.Error:
+        return {
+            "chunk_count": None,
+            "embedding_namespace": None,
+            "embedding_dimensions": None,
+        }
+
+    metadata = {str(key): str(value) for key, value in rows}
+    return {
+        "chunk_count": metadata.get("chunk_count"),
+        "embedding_namespace": metadata.get("embedding_namespace"),
+        "embedding_dimensions": metadata.get("embedding_dimensions"),
     }
 
 
@@ -148,4 +192,19 @@ def chat(request: ChatRequest):
         in_scope=result.in_scope,
         mode=result.mode,
         confidence=result.confidence,
+        debug=None if result.debug is None else LLMDebugResponse(
+            retrieval_query=result.debug.retrieval_query,
+            calls=[
+                LLMDebugCallResponse(
+                    stage=call.stage,
+                    messages=call.messages,
+                    temperature=call.temperature,
+                    max_tokens=call.max_tokens,
+                    response_text=call.response_text,
+                    skipped_reason=call.skipped_reason,
+                    error=call.error,
+                )
+                for call in result.debug.calls
+            ],
+        ),
     )

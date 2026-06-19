@@ -2,9 +2,11 @@ from pathlib import Path
 
 import pytest
 
+from app.conversation import ConversationTurn, HISTORY_INPUT_CHAR_LIMIT, clean_history
+from app.context_selector import select_context_results
 from app.faq_loader import load_and_chunk_faq
 from app.llm_client import LLMResponse
-from app.rag_pipeline import ConversationTurn, HISTORY_INPUT_CHAR_LIMIT, RAGPipeline
+from app.rag_pipeline import RAGPipeline
 from app.vector_store import SQLiteVectorStore
 from tests.helpers import CosineTestEmbedder
 
@@ -51,6 +53,12 @@ class RecordingLLMClient:
         temperature: float = 0.2,
         max_tokens: int = 420,
     ) -> LLMResponse:
+        if "You rewrite follow-up messages" in messages[0]["content"]:
+            self.calls.append(("rewrite", messages))
+            return LLMResponse(
+                text="Does SleepPilot support Garmin or Fitbit?",
+                provider="rewrite-test",
+            )
         self.calls.append(("answer", messages))
         return LLMResponse(text="Grounded answer from test LLM.", provider="answer-test")
 
@@ -197,6 +205,10 @@ def test_rag_pipeline_skips_query_rewrite_when_history_is_empty(tmp_path, monkey
     assert result.mode == "answer-test"
     assert len(llm_client.calls) == 1
     assert llm_client.calls[0][0] == "answer"
+    assert result.debug is not None
+    assert result.debug.retrieval_query == "Does SleepPilot work with Garmin or Fitbit?"
+    assert len(result.debug.calls) == 1
+    assert result.debug.calls[0].stage == "answer_generation"
     answer_messages = llm_client.calls[0][1]
     assert isinstance(answer_messages, list)
     assert "Current user question" in answer_messages[-1]["content"]
@@ -221,16 +233,23 @@ def test_rag_pipeline_rewrites_follow_up_question_before_retrieval(tmp_path, mon
     assert result.sources[0].id == "faq-006"
     assert result.answer == "Grounded answer from test LLM."
     assert len(llm_client.calls) == 2
-    rewrite_prompt = llm_client.calls[0][1]
+    rewrite_messages = llm_client.calls[0][1]
     answer_messages = llm_client.calls[1][1]
-    assert isinstance(rewrite_prompt, str)
+    assert isinstance(rewrite_messages, list)
     assert isinstance(answer_messages, list)
+    rewrite_prompt = rewrite_messages[-1]["content"]
     assert "Current user message:\nWhat about Garmin or Fitbit?" in rewrite_prompt
     assert "Current user question:\nWhat about Garmin or Fitbit?" in answer_messages[-1]["content"]
     assert answer_messages[1] == {
         "role": "user",
         "content": "Does SleepPilot support wearable devices?",
     }
+    assert result.debug is not None
+    assert result.debug.retrieval_query == "Does SleepPilot support Garmin or Fitbit?"
+    assert [call.stage for call in result.debug.calls] == [
+        "query_rewrite",
+        "answer_generation",
+    ]
 
 
 def test_rag_pipeline_limits_history_to_four_messages_and_char_budget(tmp_path):
@@ -248,9 +267,9 @@ def test_rag_pipeline_limits_history_to_four_messages_and_char_budget(tmp_path):
         ConversationTurn(role="assistant", content="recent 4"),
     ]
 
-    clean_history = pipeline._clean_history(history)
+    cleaned_history = clean_history(history)
 
-    assert [turn.content for turn in clean_history] == [
+    assert [turn.content for turn in cleaned_history] == [
         "recent 1",
         "recent 2",
         "recent 3",
@@ -263,7 +282,7 @@ def test_rag_pipeline_limits_history_to_four_messages_and_char_budget(tmp_path):
         ConversationTurn(role="user", content="z" * 700),
         ConversationTurn(role="assistant", content="w" * 700),
     ]
-    capped_history = pipeline._clean_history(long_history)
+    capped_history = clean_history(long_history)
 
     assert sum(len(turn.content) for turn in capped_history) <= HISTORY_INPUT_CHAR_LIMIT
 
@@ -290,7 +309,7 @@ def test_rag_pipeline_can_send_three_chunks_for_ambiguous_matches(tmp_path, monk
     )
     results = pipeline.retrieve("sleep habits and bedtime schedule", top_k=4)
 
-    selected = pipeline._select_context_results(results)
+    selected = select_context_results(results)
 
     assert 1 <= len(selected) <= 3
 

@@ -7,6 +7,33 @@ const quickQuestions = document.querySelectorAll("[data-question]");
 const historyLimit = 4;
 let conversationHistory = [];
 
+function logLlmDebug(debug) {
+  if (!debug) {
+    return;
+  }
+
+  console.groupCollapsed("SleepPilot LLM debug");
+  console.log("Retrieval query:", debug.retrieval_query);
+  if (!debug.calls || debug.calls.length === 0) {
+    console.log("No LLM calls were made for this response.");
+  } else {
+    debug.calls.forEach((call, index) => {
+      console.groupCollapsed(`${index + 1}. ${call.stage}`);
+      console.log("temperature:", call.temperature);
+      console.log("max_tokens:", call.max_tokens);
+      console.log("messages sent to LLM:", call.messages);
+      if (call.response_text) {
+        console.log("LLM response:", call.response_text);
+      }
+      if (call.error) {
+        console.warn("LLM error:", call.error);
+      }
+      console.groupEnd();
+    });
+  }
+  console.groupEnd();
+}
+
 function createMessage(role, text, sources = []) {
   const article = document.createElement("article");
   article.className = `message ${role}`;
@@ -93,6 +120,7 @@ async function askQuestion(question) {
 
     const payload = await response.json();
     removeTypingMessage();
+    logLlmDebug(payload.debug);
     createMessage("assistant", payload.answer, payload.sources || []);
     conversationHistory = [
       ...history,
