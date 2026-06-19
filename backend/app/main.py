@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.conversation import ConversationTurn
+from app.debug_config import load_debug_settings, log_server_debug
 from app.faq_loader import load_and_chunk_faq
 from app.rag_pipeline import RAGPipeline
 
@@ -171,6 +172,7 @@ def retrieve(question: str, top_k: int = 4) -> dict[str, Any]:
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
     pipeline = get_rag_pipeline()
+    debug_settings = load_debug_settings()
     result = pipeline.answer(
         request.question,
         history=[
@@ -178,6 +180,9 @@ def chat(request: ChatRequest):
             for turn in request.history
         ],
     )
+    if debug_settings.send_to_server:
+        log_server_debug(result.debug)
+
     return ChatResponse(
         answer=result.answer,
         sources=[
@@ -192,19 +197,28 @@ def chat(request: ChatRequest):
         in_scope=result.in_scope,
         mode=result.mode,
         confidence=result.confidence,
-        debug=None if result.debug is None else LLMDebugResponse(
-            retrieval_query=result.debug.retrieval_query,
-            calls=[
-                LLMDebugCallResponse(
-                    stage=call.stage,
-                    messages=call.messages,
-                    temperature=call.temperature,
-                    max_tokens=call.max_tokens,
-                    response_text=call.response_text,
-                    skipped_reason=call.skipped_reason,
-                    error=call.error,
-                )
-                for call in result.debug.calls
-            ],
-        ),
+        debug=build_debug_response(result.debug)
+        if debug_settings.send_to_web
+        else None,
     )
+
+
+def build_debug_response(debug) -> LLMDebugResponse | None:
+    if debug is None:
+        return None
+    return LLMDebugResponse(
+        retrieval_query=debug.retrieval_query,
+        calls=[
+            LLMDebugCallResponse(
+                stage=call.stage,
+                messages=call.messages,
+                temperature=call.temperature,
+                max_tokens=call.max_tokens,
+                response_text=call.response_text,
+                skipped_reason=call.skipped_reason,
+                error=call.error,
+            )
+            for call in debug.calls
+        ],
+    )
+
