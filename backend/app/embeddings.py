@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import hashlib
 import math
 import os
 import re
-from dataclasses import dataclass, field
-from typing import Iterable, Protocol
-
-import requests
+from typing import Any, Iterable, Protocol
 
 
 STOPWORDS = {
@@ -140,8 +136,13 @@ def tokenize(text: str) -> list[str]:
 
 
 class Embedder(Protocol):
-    dimensions: int
-    namespace: str
+    @property
+    def dimensions(self) -> int:
+        ...
+
+    @property
+    def namespace(self) -> str:
+        ...
 
     def embed(
         self,
@@ -160,76 +161,50 @@ def expand_tokens(tokens: Iterable[str]) -> list[str]:
     return expanded
 
 
-@dataclass(frozen=True)
-class HashingEmbedder:
-    """Small deterministic embedder for local RAG demos.
+class LocalSentenceTransformerEmbedder:
+    """Self-hosted embedding model loaded through SentenceTransformers."""
 
-    It creates normalized hashed bag-of-word and bigram vectors. This keeps the
-    assignment runnable without an external embedding API while still exercising
-    the same retrieve-from-vector flow a hosted embedder would use.
-    """
-
-    dimensions: int = 384
-    namespace: str = "sleeppilot-v4"
-    bigram_weight: float = 1.35
-    synonym_weight: float = 0.65
-    _hash_cache: dict[str, int] = field(default_factory=dict, init=False, repr=False)
-
-    def embed(
+    def __init__(
         self,
-        text: str,
-        task_type: str | None = None,
-        title: str | None = None,
-    ) -> list[float]:
-        tokens = tokenize(text)
-        if not tokens:
-            return [0.0] * self.dimensions
+        model_name: str = "jinaai/jina-embeddings-v5-text-small-retrieval",
+        device: str | None = None,
+        trust_remote_code: bool = False,
+        normalize_embeddings: bool = True,
+        batch_size: int = 8,
+        query_prompt_name: str = "query",
+        document_prompt_name: str = "document",
+        truncate_dim: int | None = None,
+    ):
+        self.model_name = model_name
+        self.device = device
+        self.trust_remote_code = trust_remote_code
+        self.normalize_embeddings = normalize_embeddings
+        self.batch_size = batch_size
+        self.query_prompt_name = query_prompt_name
+        self.document_prompt_name = document_prompt_name
+        self.truncate_dim = truncate_dim
+        self._model: Any | None = None
+        self._dimensions: int | None = truncate_dim
 
-        vector = [0.0] * self.dimensions
-        self._add_features(vector, tokens, weight=1.0)
-
-        bigrams = [f"{left}_{right}" for left, right in zip(tokens, tokens[1:])]
-        self._add_features(vector, bigrams, weight=self.bigram_weight)
-
-        expanded = [token for token in expand_tokens(tokens) if token not in tokens]
-        self._add_features(vector, expanded, weight=self.synonym_weight)
-
-        return normalize_vector(vector)
-
-    def _add_features(self, vector: list[float], features: Iterable[str], weight: float) -> None:
-        for feature in features:
-            index = self._stable_index(feature)
-            vector[index] += weight
-
-    def _stable_index(self, value: str) -> int:
-        cached = self._hash_cache.get(value)
-        if cached is not None:
-            return cached
-        digest = hashlib.blake2b(
-            f"{self.namespace}:{value}".encode("utf-8"), digest_size=8
-        ).digest()
-        index = int.from_bytes(digest, byteorder="big") % self.dimensions
-        self._hash_cache[value] = index
-        return index
-
-
-@dataclass(frozen=True)
-class GeminiEmbedder:
-    """Gemini embedding client for retrieval vectors.
-
-    Uses the Gemini API embedding endpoint with the free-tier-friendly
-    `gemini-embedding-001` model by default. HashingEmbedder remains available
-    for tests and offline fallback.
-    """
-
-    api_key: str
-    model: str = "gemini-embedding-001"
-    dimensions: int = 768
-    timeout_seconds: float = 20.0
+    @property
+    def dimensions(self) -> int:
+        if self._dimensions is None:
+            dimension = self._load_model().get_sentence_embedding_dimension()
+            if dimension is None:
+                raise RuntimeError(
+                    f"Could not determine embedding dimensions for {self.model_name}."
+                )
+            self._dimensions = int(dimension)
+        return self._dimensions
 
     @property
     def namespace(self) -> str:
-        return f"gemini:{self.model}:{self.dimensions}"
+        return (
+            "local-sentence-transformers:"
+            f"{self.model_name}:{self.dimensions}:"
+            f"q={self.query_prompt_name}:d={self.document_prompt_name}:"
+            f"normalize={self.normalize_embeddings}"
+        )
 
     def embed(
         self,
@@ -237,44 +212,131 @@ class GeminiEmbedder:
         task_type: str | None = None,
         title: str | None = None,
     ) -> list[float]:
-        payload: dict[str, object] = {
-            "model": f"models/{self.model}",
-            "content": {"parts": [{"text": text}]},
-            "outputDimensionality": self.dimensions,
-        }
-
-        if task_type:
-            payload["taskType"] = task_type
         if title and task_type == "RETRIEVAL_DOCUMENT":
-            payload["title"] = title
+            text = f"{title}\n{text}"
 
-        response = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/"
-            f"models/{self.model}:embedContent",
-            headers={
-                "x-goog-api-key": self.api_key,
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=self.timeout_seconds,
-        )
-        response.raise_for_status()
-        values = response.json()["embedding"]["values"]
+        model = self._load_model()
+        prompt_name = self._prompt_name(task_type)
+        text, prompt_name = self._prepare_prompt(model, text, prompt_name)
+        encode_kwargs: dict[str, object] = {
+            "sentences": text,
+            "batch_size": self.batch_size,
+            "normalize_embeddings": self.normalize_embeddings,
+        }
+        if prompt_name:
+            encode_kwargs["prompt_name"] = prompt_name
+        if self.truncate_dim:
+            encode_kwargs["truncate_dim"] = self.truncate_dim
+
+        embedding = model.encode(**encode_kwargs)
+        values = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
         return normalize_vector([float(value) for value in values])
+
+    def _load_model(self):
+        if self._model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as error:
+                raise RuntimeError(
+                    "sentence-transformers is required for local embeddings. "
+                    "Install backend/requirements.txt, then run the app again."
+                ) from error
+
+            kwargs: dict[str, object] = {
+                "trust_remote_code": self.trust_remote_code,
+            }
+            if self.device:
+                kwargs["device"] = self.device
+            self._model = SentenceTransformer(self.model_name, **kwargs)
+        return self._model
+
+    def _prompt_name(self, task_type: str | None) -> str | None:
+        if task_type == "RETRIEVAL_QUERY":
+            return self.query_prompt_name
+        if task_type == "RETRIEVAL_DOCUMENT":
+            return self.document_prompt_name
+        return None
+
+    def _prepare_prompt(
+        self,
+        model: Any,
+        text: str,
+        prompt_name: str | None,
+    ) -> tuple[str, str | None]:
+        if not prompt_name:
+            return text, None
+
+        prompts = getattr(model, "prompts", None)
+        if isinstance(prompts, dict) and prompt_name in prompts:
+            return text, prompt_name
+
+        return f"{prompt_name}: {text}", None
 
 
 def create_default_embedder() -> Embedder:
-    provider = os.getenv("EMBEDDING_PROVIDER", "gemini").lower()
-    api_key = os.getenv("GEMINI_API_KEY")
+    provider = os.getenv("EMBEDDING_PROVIDER", "local").strip().lower()
+    if provider in {"local", "sentence-transformers", "huggingface"}:
+        return create_local_embedder()
 
-    if provider == "gemini" and api_key:
-        return GeminiEmbedder(
-            api_key=api_key,
-            model=os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001"),
-            dimensions=int(os.getenv("GEMINI_EMBEDDING_DIMENSIONS", "768")),
-        )
+    raise RuntimeError(
+        "EMBEDDING_PROVIDER must be one of: local, sentence-transformers, huggingface."
+    )
 
-    return HashingEmbedder()
+
+def create_local_embedder() -> LocalSentenceTransformerEmbedder:
+    truncate_dim = _optional_positive_int_from_env("LOCAL_EMBEDDING_TRUNCATE_DIM")
+    configured_dimensions = _optional_positive_int_from_env("LOCAL_EMBEDDING_DIMENSIONS")
+    if truncate_dim is None:
+        truncate_dim = configured_dimensions
+
+    return LocalSentenceTransformerEmbedder(
+        model_name=os.getenv(
+            "LOCAL_EMBEDDING_MODEL",
+            "jinaai/jina-embeddings-v5-text-small-retrieval",
+        ),
+        device=os.getenv("LOCAL_EMBEDDING_DEVICE") or None,
+        trust_remote_code=_bool_from_env("LOCAL_EMBEDDING_TRUST_REMOTE_CODE", False),
+        normalize_embeddings=_bool_from_env("LOCAL_EMBEDDING_NORMALIZE", True),
+        batch_size=_positive_int_from_env("LOCAL_EMBEDDING_BATCH_SIZE", 8),
+        query_prompt_name=os.getenv("LOCAL_EMBEDDING_QUERY_PROMPT", "query"),
+        document_prompt_name=os.getenv("LOCAL_EMBEDDING_DOCUMENT_PROMPT", "document"),
+        truncate_dim=truncate_dim,
+    )
+
+
+def _positive_int_from_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be an integer.") from error
+    if value <= 0:
+        raise RuntimeError(f"{name} must be greater than zero.")
+    return value
+
+
+def _optional_positive_int_from_env(name: str) -> int | None:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return None
+    try:
+        value = int(raw_value)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be an integer.") from error
+    if value <= 0:
+        raise RuntimeError(f"{name} must be greater than zero.")
+    return value
+
+
+def _bool_from_env(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be a boolean value.")
 
 
 def normalize_vector(vector: list[float]) -> list[float]:

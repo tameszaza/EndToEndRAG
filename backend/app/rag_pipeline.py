@@ -8,8 +8,9 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from app.embeddings import Embedder
 from app.faq_loader import load_and_chunk_faq
-from app.llm_client import GeminiClient, LLMResponse, OpenAICompatibleClient
+from app.llm_client import LLMResponse, OpenAICompatibleClient
 from app.vector_store import SQLiteVectorStore, SearchResult
 
 
@@ -113,13 +114,12 @@ class RAGPipeline:
         self,
         faq_path: str | Path,
         vector_db_path: str | Path,
-        gemini_client: GeminiClient | None = None,
         llm_client: OpenAICompatibleClient | None = None,
+        embedder: Embedder | None = None,
     ):
         load_dotenv()
         self.faq_path = Path(faq_path)
-        self.vector_store = SQLiteVectorStore(vector_db_path)
-        self.gemini_client = gemini_client or GeminiClient()
+        self.vector_store = SQLiteVectorStore(vector_db_path, embedder=embedder)
         self.llm_client = llm_client or OpenAICompatibleClient()
         self.refresh()
 
@@ -210,7 +210,7 @@ class RAGPipeline:
 
     def _generate_answer(self, question: str, results: list[SearchResult]) -> LLMResponse:
         context = self._format_context(results)
-        provider = os.getenv("LLM_PROVIDER", "gemini").lower()
+        provider = os.getenv("LLM_PROVIDER", "local").lower()
         user_prompt = (
             f"FAQ context:\n{context}\n\n"
             f"User question: {question}\n\n"
@@ -220,15 +220,6 @@ class RAGPipeline:
             "medical boundaries. Do not include bracket citations like [1], [2], source "
             "IDs, or context numbers in the answer text."
         )
-
-        if provider == "gemini" and self.gemini_client.is_configured:
-            try:
-                return self.gemini_client.complete(
-                    system_prompt=SYSTEM_PROMPT,
-                    user_prompt=user_prompt,
-                )
-            except (RuntimeError, requests.RequestException):
-                pass
 
         if provider in {"api", "openai-compatible"} and self.llm_client.is_configured:
             try:

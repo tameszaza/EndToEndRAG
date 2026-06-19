@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from app.embeddings import HashingEmbedder
 from app.faq_loader import load_and_chunk_faq
 from app.rag_pipeline import RAGPipeline
 from app.vector_store import SQLiteVectorStore
+from tests.helpers import ConstantTestEmbedder
 
 
 FAQ_PATH = Path(__file__).resolve().parent.parent / "data" / "faq.md"
@@ -14,7 +14,7 @@ FAQ_PATH = Path(__file__).resolve().parent.parent / "data" / "faq.md"
 def make_test_store(tmp_path) -> SQLiteVectorStore:
     return SQLiteVectorStore(
         tmp_path / "vectors.sqlite3",
-        embedder=HashingEmbedder(),
+        embedder=ConstantTestEmbedder(),
     )
 
 
@@ -130,10 +130,10 @@ def test_vector_store_distinguishes_wearable_support_from_no_wearable(tmp_path):
 
 def test_rag_pipeline_answers_in_scope_question(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "local")
-    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
     pipeline = RAGPipeline(
         faq_path=FAQ_PATH,
         vector_db_path=tmp_path / "vectors.sqlite3",
+        embedder=ConstantTestEmbedder(),
     )
 
     result = pipeline.answer("Does SleepPilot work with Garmin or Fitbit?")
@@ -146,10 +146,10 @@ def test_rag_pipeline_answers_in_scope_question(tmp_path, monkeypatch):
 
 def test_rag_pipeline_sends_only_clean_context_for_clear_match(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "local")
-    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
     pipeline = RAGPipeline(
         faq_path=FAQ_PATH,
         vector_db_path=tmp_path / "vectors.sqlite3",
+        embedder=ConstantTestEmbedder(),
     )
 
     result = pipeline.answer("What is this thing?")
@@ -159,10 +159,10 @@ def test_rag_pipeline_sends_only_clean_context_for_clear_match(tmp_path, monkeyp
 
 def test_rag_pipeline_can_send_three_chunks_for_ambiguous_matches(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "local")
-    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
     pipeline = RAGPipeline(
         faq_path=FAQ_PATH,
         vector_db_path=tmp_path / "vectors.sqlite3",
+        embedder=ConstantTestEmbedder(),
     )
     results = pipeline.retrieve("sleep habits and bedtime schedule", top_k=4)
 
@@ -173,10 +173,10 @@ def test_rag_pipeline_can_send_three_chunks_for_ambiguous_matches(tmp_path, monk
 
 def test_rag_pipeline_removes_model_citation_markers(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "local")
-    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
     pipeline = RAGPipeline(
         faq_path=FAQ_PATH,
         vector_db_path=tmp_path / "vectors.sqlite3",
+        embedder=ConstantTestEmbedder(),
     )
 
     assert pipeline._clean_answer("Yes, SleepPilot can help. [2]") == "Yes, SleepPilot can help."
@@ -184,10 +184,10 @@ def test_rag_pipeline_removes_model_citation_markers(tmp_path, monkeypatch):
 
 def test_rag_pipeline_declines_out_of_scope_question(tmp_path, monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "local")
-    monkeypatch.setenv("EMBEDDING_PROVIDER", "local")
     pipeline = RAGPipeline(
         faq_path=FAQ_PATH,
         vector_db_path=tmp_path / "vectors.sqlite3",
+        embedder=ConstantTestEmbedder(),
     )
 
     result = pipeline.answer("Write Python code for a todo app")
