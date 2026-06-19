@@ -37,6 +37,31 @@ def test_chat_endpoint_returns_grounded_answer(tmp_path, monkeypatch):
     assert "jet lag" in payload["answer"].lower() or "travel" in payload["answer"].lower()
 
 
+def test_chat_endpoint_accepts_recent_history(tmp_path, monkeypatch):
+    install_test_pipeline(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat",
+        json={
+            "question": "What about Garmin?",
+            "history": [
+                {
+                    "role": "user",
+                    "content": "Does SleepPilot support wearable devices?",
+                },
+                {
+                    "role": "assistant",
+                    "content": "SleepPilot supports common wearable platforms.",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["answer"]
+
+
 def test_chat_endpoint_applies_guardrails(tmp_path, monkeypatch):
     install_test_pipeline(tmp_path, monkeypatch)
     client = TestClient(app)

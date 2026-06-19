@@ -31,7 +31,28 @@ class OpenAICompatibleClient:
     def is_configured(self) -> bool:
         return bool(self.api_key and self.base_url and self.model)
 
-    def complete(self, system_prompt: str, user_prompt: str) -> LLMResponse:
+    def complete(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.2,
+        max_tokens: int = 420,
+    ) -> LLMResponse:
+        return self.complete_messages(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+    def complete_messages(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.2,
+        max_tokens: int = 420,
+    ) -> LLMResponse:
         if not self.is_configured:
             raise RuntimeError("LLM client is not configured.")
 
@@ -43,12 +64,9 @@ class OpenAICompatibleClient:
             },
             json={
                 "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.2,
-                "max_tokens": 420,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
             },
             timeout=self.timeout_seconds,
         )

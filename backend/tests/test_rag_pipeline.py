@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 
 from app.faq_loader import load_and_chunk_faq
-from app.rag_pipeline import RAGPipeline
+from app.llm_client import LLMResponse
+from app.rag_pipeline import ConversationTurn, HISTORY_INPUT_CHAR_LIMIT, RAGPipeline
 from app.vector_store import SQLiteVectorStore
 from tests.helpers import CosineTestEmbedder
 
@@ -16,6 +17,42 @@ def make_test_store(tmp_path) -> SQLiteVectorStore:
         tmp_path / "vectors.sqlite3",
         embedder=CosineTestEmbedder(),
     )
+
+
+class RecordingLLMClient:
+    is_configured = True
+
+    def __init__(self):
+        self.calls: list[tuple[str, object]] = []
+
+    def complete(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.2,
+        max_tokens: int = 420,
+    ) -> LLMResponse:
+        self.calls.append(("rewrite", user_prompt))
+        if "Rewrite the user's current question" in system_prompt:
+            return LLMResponse(
+                text="Does SleepPilot support Garmin or Fitbit?",
+                provider="rewrite-test",
+            )
+        if "You rewrite follow-up messages" in system_prompt:
+            return LLMResponse(
+                text="Does SleepPilot support Garmin or Fitbit?",
+                provider="rewrite-test",
+            )
+        return LLMResponse(text="Grounded answer from test LLM.", provider="answer-test")
+
+    def complete_messages(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.2,
+        max_tokens: int = 420,
+    ) -> LLMResponse:
+        self.calls.append(("answer", messages))
+        return LLMResponse(text="Grounded answer from test LLM.", provider="answer-test")
 
 
 @pytest.mark.parametrize(
@@ -142,6 +179,93 @@ def test_rag_pipeline_answers_in_scope_question(tmp_path, monkeypatch):
     assert result.sources
     assert result.mode == "local-rag"
     assert "Garmin" in result.answer or "Fitbit" in result.answer
+
+
+def test_rag_pipeline_skips_query_rewrite_when_history_is_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai-compatible")
+    llm_client = RecordingLLMClient()
+    pipeline = RAGPipeline(
+        faq_path=FAQ_PATH,
+        vector_db_path=tmp_path / "vectors.sqlite3",
+        embedder=CosineTestEmbedder(),
+        llm_client=llm_client,
+    )
+
+    result = pipeline.answer("Does SleepPilot work with Garmin or Fitbit?", history=[])
+
+    assert result.sources[0].id == "faq-006"
+    assert result.mode == "answer-test"
+    assert len(llm_client.calls) == 1
+    assert llm_client.calls[0][0] == "answer"
+    answer_messages = llm_client.calls[0][1]
+    assert isinstance(answer_messages, list)
+    assert "Current user question" in answer_messages[-1]["content"]
+
+
+def test_rag_pipeline_rewrites_follow_up_question_before_retrieval(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai-compatible")
+    llm_client = RecordingLLMClient()
+    pipeline = RAGPipeline(
+        faq_path=FAQ_PATH,
+        vector_db_path=tmp_path / "vectors.sqlite3",
+        embedder=CosineTestEmbedder(),
+        llm_client=llm_client,
+    )
+    history = [
+        ConversationTurn(role="user", content="Does SleepPilot support wearable devices?"),
+        ConversationTurn(role="assistant", content="It supports common wearable platforms."),
+    ]
+
+    result = pipeline.answer("What about Garmin or Fitbit?", history=history)
+
+    assert result.sources[0].id == "faq-006"
+    assert result.answer == "Grounded answer from test LLM."
+    assert len(llm_client.calls) == 2
+    rewrite_prompt = llm_client.calls[0][1]
+    answer_messages = llm_client.calls[1][1]
+    assert isinstance(rewrite_prompt, str)
+    assert isinstance(answer_messages, list)
+    assert "Current user message:\nWhat about Garmin or Fitbit?" in rewrite_prompt
+    assert "Current user question:\nWhat about Garmin or Fitbit?" in answer_messages[-1]["content"]
+    assert answer_messages[1] == {
+        "role": "user",
+        "content": "Does SleepPilot support wearable devices?",
+    }
+
+
+def test_rag_pipeline_limits_history_to_four_messages_and_char_budget(tmp_path):
+    pipeline = RAGPipeline(
+        faq_path=FAQ_PATH,
+        vector_db_path=tmp_path / "vectors.sqlite3",
+        embedder=CosineTestEmbedder(),
+    )
+    history = [
+        ConversationTurn(role="user", content="old 1"),
+        ConversationTurn(role="assistant", content="old 2"),
+        ConversationTurn(role="user", content="recent 1"),
+        ConversationTurn(role="assistant", content="recent 2"),
+        ConversationTurn(role="user", content="recent 3"),
+        ConversationTurn(role="assistant", content="recent 4"),
+    ]
+
+    clean_history = pipeline._clean_history(history)
+
+    assert [turn.content for turn in clean_history] == [
+        "recent 1",
+        "recent 2",
+        "recent 3",
+        "recent 4",
+    ]
+
+    long_history = [
+        ConversationTurn(role="user", content="x" * 700),
+        ConversationTurn(role="assistant", content="y" * 700),
+        ConversationTurn(role="user", content="z" * 700),
+        ConversationTurn(role="assistant", content="w" * 700),
+    ]
+    capped_history = pipeline._clean_history(long_history)
+
+    assert sum(len(turn.content) for turn in capped_history) <= HISTORY_INPUT_CHAR_LIMIT
 
 
 def test_rag_pipeline_sends_only_clean_context_for_clear_match(tmp_path, monkeypatch):

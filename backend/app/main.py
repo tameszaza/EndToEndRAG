@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.faq_loader import load_and_chunk_faq
-from app.rag_pipeline import RAGPipeline
+from app.rag_pipeline import ConversationTurn, RAGPipeline
 
 
 app = FastAPI(
@@ -36,8 +36,14 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+class ConversationTurnRequest(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=700)
+
+
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=700)
+    history: list[ConversationTurnRequest] = Field(default_factory=list, max_length=4)
 
 
 class SourceResponse(BaseModel):
@@ -121,7 +127,13 @@ def retrieve(question: str, top_k: int = 4) -> dict[str, Any]:
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
     pipeline = get_rag_pipeline()
-    result = pipeline.answer(request.question)
+    result = pipeline.answer(
+        request.question,
+        history=[
+            ConversationTurn(role=turn.role, content=turn.content)
+            for turn in request.history
+        ],
+    )
     return ChatResponse(
         answer=result.answer,
         sources=[

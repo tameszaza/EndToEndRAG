@@ -24,6 +24,23 @@ including coding, homework, politics, legal advice, financial advice, or general
 diagnosis. SleepPilot is wellness guidance, not a medical device."""
 
 
+QUERY_REWRITE_PROMPT = """You rewrite follow-up messages into standalone search queries.
+
+Rules:
+1. Use the conversation history only to resolve references and omitted context.
+2. Do not answer the question.
+3. Do not add facts that are not present in the conversation.
+4. Preserve the user's original language.
+5. Return only the standalone query.
+6. If the current question is already standalone, return it unchanged.
+7. Keep the rewritten query concise."""
+
+
+HISTORY_MESSAGE_LIMIT = 4
+HISTORY_INPUT_CHAR_LIMIT = 1800
+MAX_QUESTION_LENGTH = 700
+
+
 DECLINE_MESSAGE = (
     "I can only help with SleepPilot, sleep tracking features, privacy, pricing, "
     "wearable integrations, and sleep routine guidance. I can’t help with that request here."
@@ -93,6 +110,12 @@ OUT_OF_SCOPE_TERMS = {
 
 
 @dataclass(frozen=True)
+class ConversationTurn:
+    role: str
+    content: str
+
+
+@dataclass(frozen=True)
 class ChatSource:
     id: str
     question: str
@@ -127,8 +150,13 @@ class RAGPipeline:
         chunks = load_and_chunk_faq(self.faq_path)
         self.vector_store.ensure_built(chunks)
 
-    def answer(self, question: str) -> ChatResult:
+    def answer(
+        self,
+        question: str,
+        history: list[ConversationTurn] | None = None,
+    ) -> ChatResult:
         normalized_question = question.strip()
+        clean_history = self._clean_history(history or [])
         if not normalized_question:
             return ChatResult(
                 answer="Ask me a question about SleepPilot and I’ll ground the answer in the FAQ.",
@@ -147,10 +175,11 @@ class RAGPipeline:
                 confidence=0.0,
             )
 
-        results = self.vector_store.similarity_search(normalized_question, top_k=4)
+        standalone_question = self._rewrite_question(normalized_question, clean_history)
+        results = self.vector_store.similarity_search(standalone_question, top_k=4)
         best_score = results[0].score if results else 0.0
 
-        if self._is_out_of_scope(normalized_question, best_score):
+        if self._is_out_of_scope(standalone_question, best_score):
             return ChatResult(
                 answer=DECLINE_MESSAGE,
                 sources=[],
@@ -179,7 +208,7 @@ class RAGPipeline:
             for result in useful_results[:3]
         ]
 
-        response = self._generate_answer(normalized_question, useful_results)
+        response = self._generate_answer(normalized_question, useful_results, clean_history)
         return ChatResult(
             answer=self._clean_answer(response.text),
             sources=sources,
@@ -208,29 +237,62 @@ class RAGPipeline:
                 break
         return selected
 
-    def _generate_answer(self, question: str, results: list[SearchResult]) -> LLMResponse:
+    def _generate_answer(
+        self,
+        question: str,
+        results: list[SearchResult],
+        history: list[ConversationTurn] | None = None,
+    ) -> LLMResponse:
         context = self._format_context(results)
-        provider = os.getenv("LLM_PROVIDER", "local").lower()
-        user_prompt = (
-            f"FAQ context:\n{context}\n\n"
-            f"User question: {question}\n\n"
-            "Answer in a warm, concise SleepPilot voice. Do not use information outside "
-            "the FAQ context. Only mention that SleepPilot is not a medical device when "
-            "the user asks about diagnosis, treatment, sleep disorders, symptoms, or "
-            "medical boundaries. Do not include bracket citations like [1], [2], source "
-            "IDs, or context numbers in the answer text."
+        messages = self._build_answer_messages(
+            question=question,
+            context=context,
+            history=history or [],
         )
+        provider = os.getenv("LLM_PROVIDER", "local").lower()
 
         if provider in {"api", "openai-compatible"} and self.llm_client.is_configured:
             try:
-                return self.llm_client.complete(
-                    system_prompt=SYSTEM_PROMPT,
-                    user_prompt=user_prompt,
+                return self.llm_client.complete_messages(
+                    messages=messages,
+                    temperature=0.2,
+                    max_tokens=420,
                 )
             except (RuntimeError, requests.RequestException):
                 pass
 
         return LLMResponse(text=self._local_answer(results), provider="local-rag")
+
+    def _rewrite_question(
+        self,
+        question: str,
+        history: list[ConversationTurn],
+    ) -> str:
+        if not history:
+            return question
+
+        provider = os.getenv("LLM_PROVIDER", "local").lower()
+        if provider not in {"api", "openai-compatible"} or not self.llm_client.is_configured:
+            return question
+
+        conversation = self._format_history(history)
+        user_prompt = (
+            f"Conversation history:\n{conversation}\n\n"
+            f"Current user message:\n{question}\n\n"
+            "Standalone search query:"
+        )
+        try:
+            response = self.llm_client.complete(
+                system_prompt=QUERY_REWRITE_PROMPT,
+                user_prompt=user_prompt,
+                temperature=0,
+                max_tokens=120,
+            )
+        except (RuntimeError, requests.RequestException):
+            return question
+
+        rewritten = self._clean_rewritten_question(response.text)
+        return rewritten or question
 
     def _local_answer(self, results: list[SearchResult]) -> str:
         primary = results[0].chunk
@@ -258,6 +320,79 @@ class RAGPipeline:
                 f"A: {result.chunk.answer}"
             )
         return "\n\n".join(lines)
+
+    def _build_answer_messages(
+        self,
+        question: str,
+        context: str,
+        history: list[ConversationTurn],
+    ) -> list[dict[str, str]]:
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages.extend(
+            {"role": turn.role, "content": turn.content}
+            for turn in history
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    f"FAQ context:\n{context}\n\n"
+                    f"Current user question:\n{question}\n\n"
+                    "Answer in a warm, concise SleepPilot voice. Use conversation history "
+                    "only to understand references in the current question. Use the FAQ "
+                    "context as the only factual source. Only mention that SleepPilot is "
+                    "not a medical device when the user asks about diagnosis, treatment, "
+                    "sleep disorders, symptoms, or medical boundaries. Do not include "
+                    "bracket citations like [1], [2], source IDs, or context numbers in "
+                    "the answer text."
+                ),
+            }
+        )
+        return messages
+
+    def _clean_history(self, history: list[ConversationTurn]) -> list[ConversationTurn]:
+        clean_turns: list[ConversationTurn] = []
+        remaining_chars = HISTORY_INPUT_CHAR_LIMIT
+        recent_turns: list[ConversationTurn] = []
+
+        for turn in reversed(history[-HISTORY_MESSAGE_LIMIT:]):
+            role = turn.role.strip().lower()
+            content = turn.content.strip()
+            if role not in {"user", "assistant"} or not content:
+                continue
+            if remaining_chars <= 0:
+                break
+            content = content[: min(MAX_QUESTION_LENGTH, remaining_chars)]
+            remaining_chars -= len(content)
+            recent_turns.append(
+                ConversationTurn(
+                    role=role,
+                    content=content,
+                )
+            )
+
+        for turn in reversed(recent_turns):
+            clean_turns.append(turn)
+        return clean_turns
+
+    def _format_history(self, history: list[ConversationTurn]) -> str:
+        lines = []
+        for turn in history:
+            label = "User" if turn.role == "user" else "Assistant"
+            lines.append(f"{label}: {turn.content}")
+        return "\n".join(lines)
+
+    def _clean_rewritten_question(self, question: str) -> str:
+        cleaned = question.strip().strip("\"'")
+        cleaned = re.sub(
+            r"^(standalone\s+(search\s+)?query|standalone question|query)\s*:\s*",
+            "",
+            cleaned,
+            flags=re.I,
+        )
+        if len(cleaned) > MAX_QUESTION_LENGTH:
+            return ""
+        return cleaned.strip()
 
     def _clean_answer(self, answer: str) -> str:
         cleaned = re.sub(r"\s*\[\d+\]", "", answer)

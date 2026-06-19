@@ -4,6 +4,8 @@ const chatMessages = document.querySelector("#chatMessages");
 const apiStatus = document.querySelector("#apiStatus");
 const chatMode = document.querySelector("#chatMode");
 const quickQuestions = document.querySelectorAll("[data-question]");
+const historyLimit = 4;
+let conversationHistory = [];
 
 function createMessage(role, text, sources = []) {
   const article = document.createElement("article");
@@ -73,6 +75,7 @@ function setLoading(isLoading) {
 }
 
 async function askQuestion(question) {
+  const history = conversationHistory.slice(-historyLimit);
   createMessage("user", question);
   createTypingMessage();
   setLoading(true);
@@ -81,7 +84,7 @@ async function askQuestion(question) {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, history }),
     });
 
     if (!response.ok) {
@@ -91,6 +94,11 @@ async function askQuestion(question) {
     const payload = await response.json();
     removeTypingMessage();
     createMessage("assistant", payload.answer, payload.sources || []);
+    conversationHistory = [
+      ...history,
+      { role: "user", content: question },
+      { role: "assistant", content: payload.answer },
+    ].slice(-historyLimit);
     chatMode.textContent = payload.mode === "local-rag" ? "Local RAG" : payload.mode;
   } catch (error) {
     removeTypingMessage();
